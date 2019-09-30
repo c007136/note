@@ -1,5 +1,5 @@
 # JAVA编程思想学习六
-> 第15章 ～ 第X章
+> 第15章
 
 ## 第15章 泛型 Generics
 
@@ -1298,9 +1298,1327 @@ Double
 
 ### 局限性
 
-1. 基本类型都不能作为类型参数
+#### 基本类型都不能作为类型参数
 
-自动包装机制
+[自动装箱/拆箱机制](https://blog.csdn.net/Caster_Saber/article/details/50950466)
+
+#### 实现参数化接口
+#### 转型和警告
+
+使用带有泛型参数的转型或`instanceof`不会有任何效果。下面的容器在内部将各个值存储为`Object`，并在获取这些值时，再将它们转型回T。
+
+```
+import java.util.*;
+
+class FixedSizeStack<T> {
+	private int index = 0;
+	private Object[] storage;
+
+	public FixedSizeStack(int size) {
+		storage = new Object[size];
+	}
+
+	public void push(T item) {
+		storage[index++] = item;
+	}
+
+	@SuppressWarnings("unchecked")
+	public T pop() {
+		return (T)storage[--index];
+	}
+}
+
+public class Demo {
+	public static void main (String[] args) {
+		FixedSizeStack<String> strings = new FixedSizeStack<String>(10);
+		for (String s : "A B C D E F G H I J".split(" ")) {
+			strings.push(s);
+		}
+		for (int i = 0; i < 10; i++) {
+			String s = strings.pop();
+			System.out.print(s + " ");
+		}
+		System.out.println("");
+	}
+}
+```
+
+#### 重载
+
+由于擦除的原因，重载方法将产生相同的类型签名
+
+```
+class UseList<W, T> {
+	void f(List<T> v) {}
+	void f(List<W> u) {}
+}
+```
+
+#### 基类劫持了接口
+
+```
+abstract class Animal implements Comparable<Animal> {}
+
+class Dog extends Animal implements Comparable<Dog> {
+		/** 无论CompareTo参数是Dog还是Animal，都不行 */
+    @Override
+    public int compareTo(Dog o) {
+        return 0;
+    }
+}
+```
+
+### 自限定的类型
+
+```
+class SelfBounded<T extends SelfBounded<T>> {}
+```
+
+SelfBounded类接受泛型参数T，而T由一个边界类限定，这个边界就是拥有T作为其参数的SelfBounded。这儿强调的是当extends关键字用于边界与用来创建子类明显是不同的
+
+```
+class BasicHolder<T> {
+	T element;
+	void set(T arg) { element = arg; }
+	T get() { return element; }
+	void f() {
+		System.out.println(element.getClass().getSimpleName());
+	}
+}
+
+// CGR: 古怪的循环泛型
+// 其本质：基类用导出类替代其参数
+// 这意味着泛型基类变成了一种所有导出类的公共功能的模版
+// 但是这些功能对于其所有参数和返回值，将使用导出类型。
+class Subtype extends BasicHolder<Subtype> {}
+
+public class Demo {
+	public static void main (String[] args) {
+		Subtype st1 = new Subtype();
+		Subtype st2 = new Subtype();
+		st1.set(st2);
+
+		Subtype st3 = st1.get();
+		st1.f();
+	}
+}
+```
+
+#### 自限定
+
+```
+class SelfBounded<T extends SelfBounded<T>> {
+	T element;
+	SelfBounded<T> set(T arg) {
+		element = arg;
+		return this;
+	}
+	T get() { return element; }
+}
+
+class A extends SelfBounded<A> {}
+class B extends SelfBounded<A> {} // also ok
+
+class C extends SelfBounded<C> {
+	C setAndGet(C arg) {
+		set(arg);
+		return get();
+	}
+}
+
+class F extends SelfBounded {}
+
+public class Demo {
+	public static void main (String[] args) {
+		A a = new A();
+		a.set(new A());
+		a = a.set(new A()).get();
+		a = a.get();
+
+		C c = new C();
+		c = c.setAndGet(new C());
+
+		B b = new B();
+		// error
+		//b.set(new B());
+		// error
+		//b = b.get();
+
+		F f = new F();
+		// warning
+		//f.set(new F());
+		// error
+		//f = f.get();
+	}
+}
+```
+
+自限定保证了类型参数必须与正在被定义的类相同
+
+也可以用于方法
+
+```
+class SelfBounded<T extends SelfBounded<T>> {
+	T element;
+	SelfBounded<T> set(T arg) {
+		element = arg;
+		return this;
+	}
+	T get() { return element; }
+}
+
+class A extends SelfBounded<A> {}
+
+public class Demo {
+	static <T extends SelfBounded<T>> T f(T arg) {
+		return arg.set(arg).get();
+	}
+
+
+	public static void main (String[] args) {
+		A a = f(new A());
+	}
+}
+```
+
+#### 参数协变
+
+自限定类型的价值在于它们可以产生协变参数类型--方法参数类型会随子类而变化。
+
+？？？？
+
+
+### 动态类型安全
+
+还需要吗？
+
+### 异常
+
+由于擦除的原因，将泛型应用于异常是非常受限的。catch语句不能捕获泛型类型的异常，因为在编译期和运行时都必须知道异常的确切类型。？？？
+
+但是，类型参数可能会在一个方法的throws子句中用到。这使得你可以编写随检查型异常的类型而发生变化的泛型代码。
+
+```
+import java.util.*;
+
+interface Processor<T, E extends Exception> {
+	void process(List<T> resultCollector) throws E;
+}
+
+class ProccessRunner<T, E extends Exception> extends ArrayList<Processor<T, E>> {
+	List<T> processAll() throws E {
+		List<T> resultCollector = new ArrayList<T>();
+		for (Processor<T, E> processor : this) {
+			processor.process(resultCollector);
+		}
+		return resultCollector;
+	}
+}
+
+class Failure1 extends Exception {}
+
+class Processor1 implements Processor<String, Failure1> {
+	static int count = 3;
+
+	public void process(List<String> resultCollector) throws Failure1 {
+		if (count-- > 1) {
+			resultCollector.add("Help");
+		} else {
+			resultCollector.add("Ho");
+		}
+		if (count < 0) {
+			throw new Failure1();
+		}
+	}
+}
+
+class Failure2 extends Exception {}
+
+class Processor2 implements Processor<Integer, Failure2> {
+	static int count = 2;
+
+	public void process(List<Integer> resultCollector) throws Failure2 {
+		if (count-- > 1) {
+			resultCollector.add(11);
+		} else {
+			resultCollector.add(22);
+		}
+		if (count < 0) {
+			throw new Failure2();
+		}
+	}
+}
+
+public class Demo {
+	public static void main (String[] args) {
+		ProccessRunner<String, Failure1> runner = new ProccessRunner<String, Failure1>();
+		for (int i = 0; i < 3; i++) {
+			runner.add(new Processor1());
+		}
+		try {
+			System.out.println(runner.processAll());
+		} catch (Failure1 e) {
+			System.out.println(e);
+		}
+
+		ProccessRunner<Integer, Failure2> runner2 = new ProccessRunner<Integer, Failure2>();
+		for (int i = 0; i < 3; i++) {
+			runner2.add(new Processor2());
+		}
+		try {
+			System.out.println(runner2.processAll());
+		} catch (Failure2 e) {
+			System.out.println(e);
+		}
+
+	}
+}
+```
+
+### 混型
+
+混型：混合多个类的能力，以产生一个可以表示混型中所有类型的类。这往往是你最后的手段，它将使组装多个类变得简单易行。
+
+混型的价值之一是它们可以将特性和行为一致地应用于多个类之上。如果想在混型类中修改某些东西，作为一种意外的好处，这些修改将会应用于混型所应用的所有类型之上。正由于此，混型有一点面向切面编程的味道。
+
+#### C++的混型
+
+```
+#include <string>
+#include <ctime>
+#include <iostream>
+
+using namespace std;
+
+template<class T> class TimeStamped : public T
+{
+public:
+	TimeStamped() { timeStamp = time(0); }
+	~TimeStamped() {}
+
+	long getStamp() { return timeStamp; }
+
+private:
+	long timeStamp;
+};
+
+template<class T> class SerialNumbered : public T
+{
+public:
+	SerialNumbered() { serialNumber = counter++; }
+	~SerialNumbered() {}
+
+	long getSerialNumber() { return serialNumber; }
+
+private:
+	long serialNumber;
+	static long counter;
+};
+
+template<class T> long SerialNumbered<T>::counter = 1;
+
+class Basic
+{
+public:
+	Basic() {}
+	~Basic() {}
+
+	void set(string val) { value = val; }
+	string get() { return value; }
+
+private:
+	string value;
+};
+
+int main() {
+	TimeStamped< SerialNumbered<Basic> > mixin1;
+	TimeStamped< SerialNumbered<Basic> > mixin2;
+
+	mixin1.set("test string 1");
+	mixin2.set("test string 2");
+
+	cout << mixin1.get() << " " << mixin1.getStamp() << " " << mixin1.getSerialNumber() << endl;
+	cout << mixin2.get() << " " << mixin2.getStamp() << " " << mixin2.getSerialNumber() << endl;
+
+	return 0;
+}
+
+/*
+test string 1 1568679047 1
+test string 2 1568679047 2
+*/
+```
+
+*** 怎么就和AOP有关啦？？？？ ***
+
+#### JAVA的混型
+
+通过接口和组合的方式实现
+
+```
+import java.util.*;
+
+interface TimeStamped {
+	long getStamp();
+}
+
+class TimeStampedImp implements TimeStamped {
+	private final long timeStamp;
+
+	public TimeStampedImp() {
+		timeStamp = new Date().getTime();
+	}
+
+	public long getStamp() { return timeStamp; }
+}
+
+interface SerialNumbered {
+	long getSerialNumber();
+}
+
+class SerialNumberedImp implements SerialNumbered {
+	private static long counter = 1;
+	private final long serialNumber = counter++;
+	public long getSerialNumber() { return serialNumber; }
+}
+
+interface Basic {
+	void set(String val);
+	String get();
+}
+
+class BasicImp implements Basic {
+	private String value;
+
+	public void set(String val) { value = val; }
+	public String get() { return value; }
+}
+
+class Mixin extends BasicImp implements TimeStamped, SerialNumbered {
+	private TimeStamped timeStamp = new TimeStampedImp();
+	private SerialNumbered serialNumber = new SerialNumberedImp();
+
+	public long getStamp() { return timeStamp.getStamp(); }
+	public long getSerialNumber() { return serialNumber.getSerialNumber(); }
+}
+
+
+public class Demo {
+	public static void main (String[] args) {
+		Mixin mixin1 = new Mixin();
+		Mixin mixin2 = new Mixin();
+		mixin1.set("test string 1");
+    	mixin2.set("test string 2");
+		System.out.println(mixin1.get() + " " + mixin1.getStamp() +  " " + mixin1.getSerialNumber());
+    	System.out.println(mixin2.get() + " " + mixin2.getStamp() +  " " + mixin2.getSerialNumber());
+	}
+}
+
+
+/*
+test string 1 1568680035099 1
+test string 2 1568680035099 2
+*/
+```
+
+#### 装饰器模式的混型
+
+装饰器指定包装在最初的对象的周围的所有对象都具有相同的基本接口。某些事物是可装饰的，可以通过将其他类包装在这个可装饰对象的四周，来将功能分层。
+
+```
+import java.util.*;
+
+class Basic {
+	private String value;
+
+	public void set(String val) { value = val; }
+	public String get() { return value; }
+}
+
+class Decorator extends Basic {
+	protected Basic basic;
+
+	public Decorator(Basic basic) { this.basic = basic; }
+
+	public void set(String val) { basic.set(val); }
+	public String get() { return basic.get(); }
+}
+
+class TimeStamped extends Decorator {
+	private final long timeStamp;
+
+	public TimeStamped(Basic basic) {
+		super(basic);
+		timeStamp = new Date().getTime();
+	}
+
+	public long getStamp() { return timeStamp; }
+}
+
+class SerialNumbered extends Decorator {
+	private static long counter = 1;
+	private final long serialNumber = counter++;
+
+	public SerialNumbered(Basic basic) { super(basic); }
+	public long getSerialNumber() { return serialNumber; }
+}
+
+
+public class Demo {
+	public static void main (String[] args) {
+		TimeStamped t1 = new TimeStamped(new Basic());
+		TimeStamped t2 = new TimeStamped(new SerialNumbered(new Basic()));
+
+		t1.set("test string t1");
+		t2.set("test string t2");
+
+		System.out.println(t1.get() + " " + t1.getStamp());
+		System.out.println(t2.get() + " " + t2.getStamp());
+
+		// not available
+		// t2.getSerialNumber()
+
+
+		System.out.println("---------");
+
+		SerialNumbered s1 = new SerialNumbered(new Basic());
+		SerialNumbered s2 = new SerialNumbered(new TimeStamped(new Basic()));
+
+		s1.set("test string s1");
+		s2.set("test string s2");
+
+		System.out.println(s1.get() + " " + s1.getSerialNumber());
+		System.out.println(s2.get() + " " + s2.getSerialNumber());
+
+		// not available
+		// s2.getStamp()
+	}
+}
+
+
+/*
+test string t1 1568851872970
+test string t2 1568851872970
+---------
+test string s1 2
+test string s2 3
+*/
+```
+
+### 动态代理
+
+
+```
+public class TwoTuple<A, B> {
+	public final A first;
+	public final B second;
+
+	public TwoTuple(A a, B b) {
+		first = a;
+		second = b;
+	}
+
+	public String toString() {
+		return "(" + first + "," + second + ")";
+	}
+}
+```
+
+```
+public class Tuple {
+	public static <A, B> TwoTuple<A, B> tuple(A a, B b) {
+		return new TwoTuple<A, B>(a, b);
+	}
+}
+```
+
+```
+import java.util.*;
+import java.lang.reflect.*;
+
+interface TimeStamped {
+	long getStamp();
+}
+
+class TimeStampedImp implements TimeStamped {
+	private final long timeStamp;
+
+	public TimeStampedImp() {
+		timeStamp = new Date().getTime();
+	}
+
+	public long getStamp() { return timeStamp; }
+}
+
+interface SerialNumbered {
+	long getSerialNumber();
+}
+
+class SerialNumberedImp implements SerialNumbered {
+	private static long counter = 1;
+	private final long serialNumber = counter++;
+	public long getSerialNumber() { return serialNumber; }
+}
+
+interface Basic {
+	void set(String val);
+	String get();
+}
+
+class BasicImp implements Basic {
+	private String value;
+
+	public void set(String val) { value = val; }
+	public String get() { return value; }
+}
+
+@SuppressWarnings("unchecked")
+class MixinProxy implements InvocationHandler {
+	Map<String, Object> delegatesByMethod;
+
+	public MixinProxy(TwoTuple<Object, Class<?>>... pairs) {
+		delegatesByMethod = new HashMap<String, Object>();
+		for(TwoTuple<Object, Class<?>> pair : pairs) {
+			for(Method method : pair.second.getMethods()) {
+				String methodName = method.getName();
+				if (!delegatesByMethod.containsKey(methodName)) {
+					delegatesByMethod.put(methodName, pair.first);
+				}
+			}
+		}
+	}
+
+	public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+		String methodName = method.getName();
+		Object delegate = delegatesByMethod.get(methodName);
+		return method.invoke(delegate, args);
+	}
+
+	public static Object newInstance(TwoTuple... pairs) {
+		Class[] interfaces = new Class[pairs.length];
+		for(int i = 0; i < pairs.length; i++) {
+			interfaces[i] = (Class)pairs[i].second;
+		}
+		ClassLoader cl = pairs[0].first.getClass().getClassLoader();
+		return Proxy.newProxyInstance(cl, interfaces, new MixinProxy(pairs));
+	}
+}
+
+
+
+public class Demo {
+	public static void main (String[] args) {
+		Object mixin = MixinProxy.newInstance(
+			Tuple.tuple(new BasicImp(), Basic.class),
+			Tuple.tuple(new TimeStampedImp(), TimeStamped.class),
+			Tuple.tuple(new SerialNumberedImp(),SerialNumbered.class)
+		);
+
+		Basic b = (Basic)mixin;
+    	TimeStamped t = (TimeStamped)mixin;
+    	SerialNumbered s = (SerialNumbered)mixin;
+    	b.set("Hello");
+    	System.out.println(b.get());
+    	System.out.println(t.getStamp());
+    	System.out.println(s.getSerialNumber());
+	}
+}
+
+
+/*
+Hello
+1568853861647
+1
+*/
+```
+
+### 潜在类型机制
+
+**因为擦除要求指定可能会用到的泛型类型的边界，以安全地调用代码中的泛型对象上的具体方法。这是对“泛化”概念的一种明显的限制，因为必须限制你的泛型类型，使它们继续自特定的类，或者实现特定的接口。在某些情况下，你最终可能会使用普通类或普通接口，因为限定边界的泛型可能会和指定类或接口没有任何区别。** (怎么理解？？)
+
+某些编程语言提供的一种解决方案称为潜在类型机制或结构化类型机制，而更古怪的术语称为鸭子类型机制，即“如果它走起来像鸭子，并且叫起来也像鸭子，那么你就可以将它当作鸭子。”
+
+潜在类型机制是一种代码组织和复用机制。
+
+#### python代码
+
+```
+class Dog:
+	def speak(self):
+		print "Dog speak"
+	def sit(self):
+		print "Dog Sit"
+	def reproduce(self):
+		pass
+
+
+class Robot:
+	def speak(self):
+		print "Robot Speak"
+	def sit(self):
+	    print "Robot Sit!"
+	def oilChange(self):
+		pass
+
+def perform(anything):
+	anything.speak()
+	anything.sit()
+
+a = Dog();
+b = Robot();
+perform(a);
+perform(b);
+
+/*
+Dog speak
+Dog Sit
+Robot Speak
+Robot Sit
+*/
+```
+
+#### C++代码
+
+```
+#include <iostream>
+
+using namespace std;
+
+class Dog {
+public:
+	void speak() { cout << "Dog Speak" << endl; }
+	void sit() { cout << "Dog Sit" << endl; }
+	void reproduce() {}
+};
+
+class Robot {
+public:
+	void speak() { cout << "Robot Speak" << endl; }
+	void sit() { cout << "Robot Sit" << endl; }
+	void oilChange() {}
+};
+
+template<class T> void perform(T anything) {
+	anything.speak();
+	anything.sit();
+}
+
+int main() {
+	Dog d;
+	Robot r;
+	perform(d);
+	perform(r);
+}
+```
+
+#### Java泛型实现
+
+```
+interface Perform {
+	void speak();
+	void sit();
+}
+
+class Dog implements Perform {
+	public void speak() {
+		System.out.println("Dog Speak");
+	}
+
+	public void sit() {
+		System.out.println("Dog Sit");
+	}
+}
+
+class Robot implements Perform {
+	public void speak() {
+		System.out.println("Robot Speak");
+	}
+
+	public void sit() {
+		System.out.println("Robot Sit");
+	}
+}
+
+
+public class Demo {
+	static <T extends Perform> void f(T t) {
+		t.speak();
+		t.sit();
+	}
+
+
+	public static void main (String[] args) {
+		Dog dog = new Dog();
+		f(dog);
+		Robot robot = new Robot();
+		f(robot);
+	}
+}
+
+/*
+Dog Speak
+Dog Sit
+Robot Speak
+Robot Sit
+*/
+```
+
+### 对缺乏潜在类型机制的补偿
+
+#### Java反射实现
+
+```
+import java.lang.reflect.*;
+
+interface Perform {
+	void speak();
+	void sit();
+}
+
+class Dog implements Perform {
+	public void speak() {
+		System.out.println("Dog Speak");
+	}
+
+	public void sit() {
+		System.out.println("Dog Sit");
+	}
+}
+
+class Robot implements Perform {
+	public void speak() {
+		System.out.println("Robot Speak");
+	}
+
+	public void sit() {
+		System.out.println("Robot Sit");
+	}
+}
+
+class A {
+	void f() {};
+	void g() {};
+}
+
+
+public class Demo {
+	static void f(Object object) {
+		Class<?> o = object.getClass();
+		// 为什么要最外面包一层try呢？
+		try {
+			try {
+				Method speak = o.getMethod("speak");
+				speak.invoke(object);
+			} catch (NoSuchMethodException e) {
+				System.out.println("no speak method");
+			}
+			try {
+				Method sit = o.getMethod("sit");
+				sit.invoke(object);
+			} catch (NoSuchMethodException e) {
+				System.out.println("no sit method");
+			}
+		} catch (Exception e) {
+			throw new RuntimeException(o.toString(), e);
+		}
+	}
+
+
+	public static void main (String[] args) {
+		Dog dog = new Dog();
+		f(dog);
+		Robot robot = new Robot();
+		f(robot);
+
+		A a = new A();
+		f(a);
+	}
+}
+
+/*
+Dog Speak
+Dog Sit
+Robot Speak
+Robot Sit
+no speak method
+no sit method
+*/
+```
+
+#### 将一个方法应用于序列
+
+```
+import java.util.*;
+
+public class SimpleQueue<T> implements Iterable<T> {
+  private LinkedList<T> storage = new LinkedList<T>();
+  public void add(T t) { storage.offer(t); }
+  public T get() { return storage.poll(); }
+  public Iterator<T> iterator() {
+    return storage.iterator();
+  }
+}
+```
+
+```
+import java.lang.reflect.*;
+import java.util.*;
+
+class Apply {
+	public static <T, S extends Iterable<? extends T>> void apply(S seq, Method f, Object... args) {
+		try {
+			for (T t : seq) {
+				f.invoke(t, args);
+			} 
+		} catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+	}
+}
+
+class Shape {
+	public void rotate() {
+		System.out.println(this + " rotate");
+	}
+	public void resize(int newSize) {
+		System.out.println(this + " resize " + newSize);
+	}
+}
+
+class Square extends Shape {}
+
+class FilledList<T> extends ArrayList<T> {
+	public FilledList(Class<? extends T> type, int size) {
+		try {
+			for(int i = 0; i < size; i++)
+				add(type.newInstance());
+		} catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+	}
+}
+
+public class Demo {
+	public static void main (String[] args) throws Exception {
+		List<Shape> shapes = new ArrayList<Shape>();
+		for (int i = 0; i < 2; i++) {
+			shapes.add(new Shape());
+		}
+		Apply.apply(shapes, Shape.class.getMethod("rotate"));
+		Apply.apply(shapes, Shape.class.getMethod("resize", int.class), 5);
+
+		System.out.println("----------");
+
+		List<Square> squares = new ArrayList<Square>();
+		for (int i = 0; i < 2; i++) {
+			squares.add(new Square());
+		}
+		Apply.apply(squares, Shape.class.getMethod("rotate"));
+		Apply.apply(squares, Shape.class.getMethod("resize", int.class), 5);
+
+		System.out.println("----------");
+
+		Apply.apply(new FilledList<Shape>(Shape.class, 2), Shape.class.getMethod("rotate"));
+		Apply.apply(new FilledList<Shape>(Square.class, 2), Shape.class.getMethod("rotate"));
+
+		System.out.println("----------");
+
+		SimpleQueue<Shape> shapeQ = new SimpleQueue<Shape>();
+		for (int i = 0; i < 2; i++) {
+			shapeQ.add(new Shape());
+			shapeQ.add(new Square());
+		}
+		Apply.apply(shapeQ, Shape.class.getMethod("rotate"));
+	}
+}
+
+/*
+Shape@4e25154f rotate
+Shape@70dea4e rotate
+Shape@4e25154f resize 5
+Shape@70dea4e resize 5
+----------
+Square@5c647e05 rotate
+Square@33909752 rotate
+Square@5c647e05 resize 5
+Square@33909752 resize 5
+----------
+Shape@55f96302 rotate
+Shape@3d4eac69 rotate
+Square@42a57993 rotate
+Square@75b84c92 rotate
+----------
+Shape@6bc7c054 rotate
+Square@232204a1 rotate
+Shape@4aa298b7 rotate
+Square@7d4991ad rotate
+*/
+```
+
+#### 当你并未碰巧拥有正确的接口时
+
+```
+import java.util.*;
+
+class Fill {
+	public static <T> void fill(Collection<T> collection, Class<? extends T> classToken, int size) {
+		for (int i = 0; i < size; i++) {
+			try {
+				collection.add(classToken.newInstance());
+			} catch (Exception e) {
+				throw new RuntimeException(e);
+			}
+		}
+	}
+}
+
+class Contract {
+	private static long counter = 0;
+	private final long id = counter++;
+	public String toString() {
+		return getClass().getName() + " " + id;
+	}
+}
+
+class TitleTransfer extends Contract {}
+
+public class Demo {
+	public static void main (String[] args) throws Exception {
+		List<Contract> contracts = new ArrayList<Contract>();
+		Fill.fill(contracts, Contract.class, 2);
+		Fill.fill(contracts, TitleTransfer.class, 2);
+
+		for(Contract c : contracts) {
+			System.out.println(c);
+		}
+
+		SimpleQueue<Contract> contractQueue = new SimpleQueue<Contract>();
+		// 参数不匹配; SimpleQueue<Contract>无法转换为Collection<T>
+		//Fill.fill(contractQueue, Contract.class, 3);
+	}
+}
+
+/*
+Contract 0
+Contract 1
+TitleTransfer 2
+TitleTransfer 3
+*/
+```
+
+#### 用适配器仿真潜在类型机制
+
+潜在类型机制机制在这里实现什么？它意味着你可以编写代码声明：“我不关心我在这里使用的类型，只要它具有这些方法即可。”实际上，潜在类型机制创建了一个包含所需方法的隐式接口。
+
+从我们拥有的接口中编写代码来产生我们需要的接口，这是适配器设计模式的一个典型示例。我们可以使用适配器来适配已有的接口，以产生想要的接口。
+
+```
+import java.util.*;
+
+interface Addable<T> {
+	void add(T t);
+}
+
+class Contract {
+	private static long counter = 0;
+	private final long id = counter++;
+	public String toString() {
+		return getClass().getName() + " " + id;
+	}
+}
+
+class TitleTransfer extends Contract {}
+
+class Fill {
+	public static <T> void fill(Addable<T> addable, Class<? extends T> classToken, int size) {
+		for (int i = 0; i < size; i++) {
+			try {
+				addable.add(classToken.newInstance());
+			} catch (Exception e) {
+				throw new RuntimeException(e);
+			}
+		}
+	}
+}
+
+class AddableCollectionAdapter<T> implements Addable<T> {
+	private Collection<T> c;
+	public AddableCollectionAdapter(Collection<T> c) {
+		this.c = c;
+	}
+
+	public void add(T item) {
+		c.add(item);
+	}
+}
+
+class Adapter {
+	public static <T> Addable<T> collectionAdapter(Collection<T> c) {
+		return new AddableCollectionAdapter<T>(c);
+	}
+}
+
+class AddableSimpleQueue<T> extends SimpleQueue<T> implements Addable<T> {
+	public void add(T item) {
+		super.add(item);
+	}
+}
+
+public class Demo {
+	public static void main (String[] args) throws Exception {
+		List<Contract> contracts = new ArrayList<Contract>();
+		Fill.fill(Adapter.collectionAdapter(contracts), Contract.class, 2);
+		Fill.fill(Adapter.collectionAdapter(contracts), TitleTransfer.class, 2);
+		for(Contract c : contracts) {
+			System.out.println(c);
+		}
+
+		System.out.println("----------");
+
+		AddableSimpleQueue<Contract> queue = new AddableSimpleQueue<Contract>();
+		Fill.fill(queue, Contract.class, 2);
+		Fill.fill(queue, TitleTransfer.class, 2);
+		for(Contract c : queue) {
+			System.out.println(c);
+		}
+	}
+}
+
+/*
+Contract 0
+Contract 1
+TitleTransfer 2
+TitleTransfer 3
+----------
+Contract 4
+Contract 5
+TitleTransfer 6
+TitleTransfer 7
+*/
+```
+
+### 将函数对象用作策略
+
+函数对象就是在某种程度上行为像函数的对象 —— 一般地，会有一个相关的方法。
+
+
+```
+import java.math.*;
+import java.util.concurrent.atomic.*;
+import java.util.*;
+
+interface Combiner<T> {
+	T combine(T x, T y);
+}
+
+interface UnaryFunction<R, T> {
+	R function(T x);
+}
+
+interface Collector<T> extends UnaryFunction<T, T> {
+	T result();
+}
+
+interface UnaryPredicate<T> {
+	boolean test(T x);
+}
+
+public class Demo {
+	public static <T> T reduce(Iterable<T> seq, Combiner<T> combiner) {
+		Iterator<T> it = seq.iterator();
+		if (it.hasNext()) {
+			T result = it.next();
+			while (it.hasNext()) {
+				result = combiner.combine(result, it.next());
+			}
+			return result;
+		}
+		return null;
+	}
+
+	public static <T> Collector<T> forEach(Iterable<T> seq, Collector<T> func) {
+		for (T t : seq) {
+			func.function(t);
+		}
+		return func;
+	}
+
+	public static <R, T> List<R> transform(Iterable<T> seq, UnaryFunction<R, T> func) {
+		List<R> result = new ArrayList<R>();
+		for (T t : seq) {
+			result.add(func.function(t));
+		}
+		return result;
+	}
+
+	public static <T> List<T> filter(Iterable<T> seq, UnaryPredicate<T> pred) {
+		List<T> result = new ArrayList<T>();
+		for (T t : seq) {
+			if (pred.test(t)) {
+				result.add(t);
+			}
+		}
+		return result;
+	}
+
+	static class IntegerAdder implements Combiner<Integer> {
+		public Integer combine(Integer x, Integer y) {
+			return x + y;
+		}
+	}
+
+	static class IntegerSubtracter implements Combiner<Integer> {
+		public Integer combine(Integer x, Integer y) {
+			return x - y;
+		}
+	}
+
+	static class BigDecimalAdder implements Combiner<BigDecimal> {
+		public BigDecimal combine(BigDecimal x, BigDecimal y) {
+			return x.add(y);
+		}
+	}
+
+	static class BigIntegerAdder implements Combiner<BigInteger> {
+		public BigInteger combine(BigInteger x, BigInteger y) {
+			return x.add(y);
+		}
+	}
+
+	static class AtomicLongAdder implements Combiner<AtomicLong> {
+		public AtomicLong combine(AtomicLong x, AtomicLong y) {
+			return new AtomicLong(x.addAndGet(y.get()));
+		}
+	}
+
+	static class BigDecimalUlp implements UnaryFunction<BigDecimal, BigDecimal> {
+		public BigDecimal function(BigDecimal x) {
+			return x.ulp();
+		}
+	}
+
+	static class GreaterThan<T extends Comparable<T>> implements UnaryPredicate<T> {
+		private T bound;
+		public GreaterThan(T bound) {
+			this.bound = bound;
+		}
+
+		public boolean test(T x) {
+			return x.compareTo(bound) > 0;
+		}
+	}
+
+	static class MultiplyingIntegerCollector implements Collector<Integer> {
+		private Integer val = 1;
+		public Integer function(Integer x) {
+			val *= x;
+			return val;
+		}
+		public Integer result() {
+			return val;
+		}
+	}
+
+	public static void main (String[] args) throws Exception {
+		List<Integer> li = Arrays.asList(1, 2, 3, 4, 5, 6, 7);
+		Integer result = reduce(li, new IntegerAdder());
+		System.out.println("adder result = " + result);
+
+		result = reduce(li, new IntegerSubtracter());
+		System.out.println("subtracter result = " + result);
+
+		List<Integer> lFilter = filter(li, new GreaterThan<Integer>(4));
+		System.out.println("lFilter = " + lFilter);
+
+		Integer i1 = forEach(li, new MultiplyingIntegerCollector()).result();
+		System.out.println("i1 = " + i1);
+
+		Integer i2 = forEach(lFilter, new MultiplyingIntegerCollector()).result();
+		System.out.println("i2 = " + i2);
+
+		MathContext mc = new MathContext(7);
+		List<BigDecimal> lbd = Arrays.asList(
+			new BigDecimal(1.1, mc),
+			new BigDecimal(2.2, mc),
+			new BigDecimal(3.3, mc),
+			new BigDecimal(4.4, mc)
+		);
+		BigDecimal rbd = reduce(lbd, new BigDecimalAdder());
+		System.out.println("rbd = " + rbd);
+
+		List<BigDecimal> bFilter = filter(lbd, new GreaterThan<BigDecimal>(new BigDecimal(3)));
+		System.out.println("bFilter = " + bFilter);
+
+		List<BigInteger> lbi = new ArrayList<BigInteger>();
+		BigInteger bi = BigInteger.valueOf(11);
+		for (int i = 0; i < 11; i++) {
+			lbi.add(bi);
+			bi = bi.nextProbablePrime();
+		}
+		System.out.println("lbi = " + lbi);
+
+		BigInteger rbi = reduce(lbi, new BigIntegerAdder());
+		System.out.println("rbi = " + rbi);
+		System.out.println(rbi.isProbablePrime(5));
+
+		List<AtomicLong> lal = Arrays.asList(
+			new AtomicLong(11),
+			new AtomicLong(47),
+			new AtomicLong(74),
+			new AtomicLong(133)
+		);
+		AtomicLong ral = reduce(lal, new AtomicLongAdder());
+		System.out.println("ral = " + ral);
+
+		List lTransform = transform(lbd, new BigDecimalUlp());
+		System.out.println("lTransform = " + lTransform);
+	}
+}
+
+/*
+adder result = 28
+subtracter result = -26
+lFilter =[5, 6, 7]
+i1 =5040
+i2 = 210
+rbd = 11.000000
+bFilter = [3.300000, 4.400000]
+lbi = [11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47]
+rbi = 311
+true
+ral = 265
+lTransform = [0.000001, 0.000001, 0.000001, 0.000001]
+*/
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
