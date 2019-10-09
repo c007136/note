@@ -533,6 +533,195 @@ pool-1-thread-1- #4(Liftoff!),
 */
 ```
 
+#### 从任务中产生返回值
+
+Callable的类型参数表示的是从方法`call()`中返回的值，并且必须使用`ExecutorService.submit()`方法调用它。
+
+```
+import java.util.concurrent.*;
+import java.util.*;
+
+class TaskWithResult implements Callable<String> {
+    private int id;
+
+    public TaskWithResult(int id) {
+        this.id = id;
+    }
+
+    public String call() {
+        String threadName = Thread.currentThread().getName();
+        return "result of TaskWithResult " + id + " thread name is " + threadName;
+    }
+}
+
+public class Demo {
+    public static void main(String[] args) throws Exception {
+        ExecutorService es = Executors.newCachedThreadPool();
+        ArrayList<Future<String>> results = new ArrayList<Future<String>>();
+        for (int i = 0; i < 10; i++) {
+            Future<String> fs = es.submit(new TaskWithResult(i));
+            results.add(fs);
+        }
+        for (Future<String> fs : results) {
+            try {
+                System.out.println(fs.get());
+            } catch (InterruptedException e) {
+                System.out.println(e);
+                return;
+            } catch (ExecutionException e) {
+                System.out.println(e);
+                return;
+            } finally {
+                es.shutdown();
+            }
+        }
+    }
+}
+
+/*
+result of TaskWithResult 0 thread name is pool-1-thread-1
+result of TaskWithResult 1 thread name is pool-1-thread-2
+result of TaskWithResult 2 thread name is pool-1-thread-3
+result of TaskWithResult 3 thread name is pool-1-thread-4
+result of TaskWithResult 4 thread name is pool-1-thread-5
+result of TaskWithResult 5 thread name is pool-1-thread-6
+result of TaskWithResult 6 thread name is pool-1-thread-2
+result of TaskWithResult 7 thread name is pool-1-thread-6
+result of TaskWithResult 8 thread name is pool-1-thread-5
+result of TaskWithResult 9 thread name is pool-1-thread-3
+*/
+```
+
+上面的`Future`表示异步计算的结果。
+
+#### 优先级
+
+```
+import java.util.concurrent.*;
+
+public class Demo implements Runnable {
+    private int countDown = 5;
+    private volatile double d;
+    private int priority;
+
+    public Demo(int priority) {
+        this.priority = priority;
+    }
+
+    public String toString() {
+        String threadName = Thread.currentThread().getName();
+        return Thread.currentThread() + " countDown: " + countDown + " priority: " + priority;
+    }
+
+    public void run() {
+        Thread.currentThread().setPriority(priority);
+
+        while (true) {
+            for (int i = 1; i < 100000; i++) {
+                d += (Math.PI + Math.E) / (double)i;
+                if (i % 1000 == 0) {
+                    Thread.yield();
+                }
+            }
+            System.out.println(this);
+            if (--countDown == 0) {
+                return;
+            }
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        ExecutorService es = Executors.newCachedThreadPool();
+        es.execute(new Demo(Thread.MAX_PRIORITY));
+        for (int i = 0; i < 5; i++) {
+            es.execute(new Demo(Thread.MIN_PRIORITY));
+        }
+        es.shutdown();
+    }
+}
+
+/*
+Thread[pool-1-thread-6,1,main] countDown: 5 priority: 1
+Thread[pool-1-thread-3,1,main] countDown: 5 priority: 1
+Thread[pool-1-thread-1,10,main] countDown: 5 priority: 10
+Thread[pool-1-thread-2,1,main] countDown: 5 priority: 1
+Thread[pool-1-thread-5,1,main] countDown: 5 priority: 1
+Thread[pool-1-thread-4,1,main] countDown: 5 priority: 1
+Thread[pool-1-thread-3,1,main] countDown: 4 priority: 1
+Thread[pool-1-thread-1,10,main] countDown: 4 priority: 10
+Thread[pool-1-thread-6,1,main] countDown: 4 priority: 1
+Thread[pool-1-thread-5,1,main] countDown: 4 priority: 1
+Thread[pool-1-thread-2,1,main] countDown: 4 priority: 1
+Thread[pool-1-thread-4,1,main] countDown: 4 priority: 1
+Thread[pool-1-thread-3,1,main] countDown: 3 priority: 1
+Thread[pool-1-thread-6,1,main] countDown: 3 priority: 1
+Thread[pool-1-thread-1,10,main] countDown: 3 priority: 10
+Thread[pool-1-thread-5,1,main] countDown: 3 priority: 1
+Thread[pool-1-thread-2,1,main] countDown: 3 priority: 1
+Thread[pool-1-thread-4,1,main] countDown: 3 priority: 1
+Thread[pool-1-thread-3,1,main] countDown: 2 priority: 1
+Thread[pool-1-thread-6,1,main] countDown: 2 priority: 1
+Thread[pool-1-thread-1,10,main] countDown: 2 priority: 10
+Thread[pool-1-thread-5,1,main] countDown: 2 priority: 1
+Thread[pool-1-thread-2,1,main] countDown: 2 priority: 1
+Thread[pool-1-thread-4,1,main] countDown: 2 priority: 1
+Thread[pool-1-thread-3,1,main] countDown: 1 priority: 1
+Thread[pool-1-thread-6,1,main] countDown: 1 priority: 1
+Thread[pool-1-thread-1,10,main] countDown: 1 priority: 10
+Thread[pool-1-thread-5,1,main] countDown: 1 priority: 1
+Thread[pool-1-thread-2,1,main] countDown: 1 priority: 1
+Thread[pool-1-thread-4,1,main] countDown: 1 priority: 1
+*/
+```
+
+从结果可以看出，线程的优先级仍然无法保障线程的执行次序。只不过，优先级高的线程获取CPU资源的概率较大，优先级低的并非没机会执行。
+
+#### 后台线程
+
+后台线程，是指在程序运行的时候在后台提供一种通用服务的线程，并且这种线程并不属于程序中不可或缺的部分。
+
+```
+import java.util.concurrent.*;
+
+public class Demo implements Runnable {
+    public void run() {
+        try {
+            while (true) {
+                TimeUnit.MILLISECONDS.sleep(10);
+                System.out.println(Thread.currentThread() + " " + this);
+            }
+        } catch (InterruptedException e) {
+            System.out.println("sleep() interrupted");
+        }
+    }
+
+    public static void main(String[] args) throws Exception {
+        for (int i = 0; i < 10; i++) {
+            Thread deamon = new Thread(new Demo());
+            deamon.setDaemon(true);
+            deamon.start();
+        }
+        System.out.println("all deamons started");
+        TimeUnit.MILLISECONDS.sleep(15);
+        System.out.println("main thread ended " + Thread.currentThread());
+    }
+}
+
+/*
+all deamons started
+Thread[Thread-5,5,main] Demo@17141277
+Thread[Thread-8,5,main] Demo@6577e002
+Thread[Thread-0,5,main] Demo@29fa0068
+Thread[Thread-2,5,main] Demo@c804073
+Thread[Thread-6,5,main] Demo@142339a3
+Thread[Thread-1,5,main] Demo@4c6f1c80
+Thread[Thread-9,5,main] Demo@3786deeb
+Thread[Thread-3,5,main] Demo@7f2ac5a7
+Thread[Thread-4,5,main] Demo@5a67a4e
+Thread[Thread-7,5,main] Demo@7502521d
+main thread ended Thread[main,5,main]
+*/
+```
 
 
 
