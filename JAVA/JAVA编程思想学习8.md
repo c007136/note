@@ -882,10 +882,9 @@ Delivering Mail 1 automatically
 */
 ```
 
-???
-https://www.cnblogs.com/java-my-life/archive/2012/05/28/2516865.html
+### 使用enum的状态机
 
-### 
+一个状态机可以具有有限个特定的状态，它通常根据输入，从一个状态转移到下一个状态，不过也可能存在瞬时状态，而一旦任务执行结束，状态机就会立刻离开瞬时状态。
 
 
 
