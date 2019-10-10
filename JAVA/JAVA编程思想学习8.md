@@ -1,5 +1,5 @@
 # JAVA编程思想学习八
-> 第18章 ～ 第X章
+> 第18章 ～ 第19章
 
 ## 第18章：Java I/O系统
 
@@ -886,65 +886,370 @@ Delivering Mail 1 automatically
 
 一个状态机可以具有有限个特定的状态，它通常根据输入，从一个状态转移到下一个状态，不过也可能存在瞬时状态，而一旦任务执行结束，状态机就会立刻离开瞬时状态。
 
+```
+import java.util.*;
+import java.io.*;
+
+enum Input {
+  NICKEL(5), 
+  DIME(10), 
+  QUARTER(25), 
+  DOLLAR(100),
+  TOOTHPASTE(200), 
+  CHIPS(75), 
+  SODA(100), 
+  SOAP(50),
+  ABORT_TRANSACTION {
+    public int amount() { // Disallow
+      throw new RuntimeException("ABORT.amount()");
+    }
+  },
+  STOP { // This must be the last instance.
+    public int amount() { // Disallow
+      throw new RuntimeException("SHUT_DOWN.amount()");
+    }
+  };
+
+  int value; // In cents
+  Input(int value) { this.value = value; }
+  Input() {}
+  public int amount() { return value; }; // In cents
+  static Random rand = new Random(47);
+  public static Input randomSelection() {
+    // Don't include STOP:
+    return values()[rand.nextInt(values().length - 1)];
+  }
+}
+
+enum Category {
+	MONEY(Input.NICKEL, Input.DIME, Input.QUARTER, Input.DOLLAR),
+	ITEM_SELECTION(Input.TOOTHPASTE, Input.CHIPS, Input.SODA, Input.SOAP),
+	QUIT_TRANSACTION(Input.ABORT_TRANSACTION),
+	SHUT_DOWN(Input.STOP);
+
+	private Input[] values;
+	Category(Input... types) { values = types; }
+
+	private static EnumMap<Input, Category> categories = new EnumMap<Input, Category>(Input.class);
+	static {
+		for (Category c : Category.class.getEnumConstants()) {
+			for (Input type : c.values) {
+				categories.put(type, c);
+			}
+		}
+	}
+
+	public static Category categorize(Input input) {
+		return categories.get(input);
+	}
+}
+
+class VendingMachine {
+	private static State state = State.RESTING;
+	private static int amount = 0;
+	private static Input selection = null;
+
+	enum StateDuration { TRANSIENT }
+
+	enum State {
+		RESTING {
+			void next(Input input) {
+				switch (Category.categorize(input)) {
+					case MONEY:
+						amount += input.amount();
+						state = ADDING_MONEY;
+						break;
+					case SHUT_DOWN:
+						state = TERMINAL;
+						break;
+					default:
+						break;
+				}
+			}
+		},
+		ADDING_MONEY {
+			void next(Input input) {
+				switch (Category.categorize(input)) {
+					case MONEY:
+						amount += input.amount();
+						break;
+					case ITEM_SELECTION:
+						selection = input;
+						if (amount < selection.amount()) {
+							System.out.println("Insufficient money for " + selection);
+						} else {
+							state = DISPENSING;
+						}
+						break;
+					case QUIT_TRANSACTION:
+						state = GIVING_CHANGE;
+						break;
+					case SHUT_DOWN:
+						state = TERMINAL;
+						break;
+					default:
+						break;
+				}
+			}
+		},
+		DISPENSING(StateDuration.TRANSIENT) {
+			void next() {
+				System.out.println("here is your " + selection);
+				amount -= selection.amount();
+				state = GIVING_CHANGE;
+			}
+		},
+		GIVING_CHANGE(StateDuration.TRANSIENT) {
+			void next() {
+				if (amount > 0) {
+					System.out.println("Your change: " + amount);
+					amount = 0;
+				}
+				state = RESTING;
+			}
+		},
+		TERMINAL {
+			void output() {
+				System.out.println("Halted");
+			}
+		};
+
+		private boolean isTransient = false;
+
+		State() {}
+		State(StateDuration sd) { isTransient = true; }
+
+		void next(Input input) {
+			throw new RuntimeException("Only call " + "next(Input input) for non-transient states");
+		}
+
+		void next() {
+			throw new RuntimeException("Only call next() for " + "StateDuration.TRANSIENT states");
+		}
+
+		void output() {
+			System.out.println(amount);
+		}
+	}
+
+	static void run(Generator<Input> gen) {
+		while (state != State.TERMINAL) {
+			state.next(gen.next());
+			while (state.isTransient) {
+				state.next();
+			}
+			state.output();
+		}
+	}
+}
+
+class RandomInputGenerator implements Generator<Input> {
+	public Input next() {
+		return Input.randomSelection();
+	}
+}
+
+class FileInputGenerator implements Generator<Input> {
+	private Iterator<String> input;
+
+	public FileInputGenerator(String fileName) {
+		input = new TextFile(fileName, ";").iterator();
+	}
+
+	public Input next() {
+		if (!input.hasNext()) {
+			return null;
+		}
+		return Enum.valueOf(Input.class, input.next().trim());
+	}
+}
 
 
+public class Demo {
+	public static void main(String[] args) {
+		Generator<Input> gen = new RandomInputGenerator();
+		if (args.length == 1) {
+			gen = new FileInputGenerator(args[0]);
+		}
+
+		VendingMachine.run(gen);
+	}
+}
+```
+
+```
+import java.io.*;
+import java.util.*;
+
+public class TextFile extends ArrayList<String> {
+  // Read a file as a single string:
+  public static String read(String fileName) {
+    StringBuilder sb = new StringBuilder();
+    try {
+      BufferedReader in= new BufferedReader(new FileReader(
+        new File(fileName).getAbsoluteFile()));
+      try {
+        String s;
+        while((s = in.readLine()) != null) {
+          sb.append(s);
+          sb.append("\n");
+        }
+      } finally {
+        in.close();
+      }
+    } catch(IOException e) {
+      throw new RuntimeException(e);
+    }
+    return sb.toString();
+  }
+  // Write a single file in one method call:
+  public static void write(String fileName, String text) {
+    try {
+      PrintWriter out = new PrintWriter(
+        new File(fileName).getAbsoluteFile());
+      try {
+        out.print(text);
+      } finally {
+        out.close();
+      }
+    } catch(IOException e) {
+      throw new RuntimeException(e);
+    }
+  }
+  // Read a file, split by any regular expression:
+  public TextFile(String fileName, String splitter) {
+    super(Arrays.asList(read(fileName).split(splitter)));
+    // Regular expression split() often leaves an empty
+    // String at the first position:
+    if(get(0).equals("")) remove(0);
+  }
+  // Normally read by lines:
+  public TextFile(String fileName) {
+    this(fileName, "\n");
+  }
+  public void write(String fileName) {
+    try {
+      PrintWriter out = new PrintWriter(
+        new File(fileName).getAbsoluteFile());
+      try {
+        for(String item : this)
+          out.println(item);
+      } finally {
+        out.close();
+      }
+    } catch(IOException e) {
+      throw new RuntimeException(e);
+    }
+  }
+  // Simple test:
+  public static void main(String[] args) {
+    String file = read("TextFile.java");
+    write("test.txt", file);
+    TextFile text = new TextFile("test.txt");
+    text.write("test2.txt");
+    // Break into unique sorted list of words:
+    TreeSet<String> words = new TreeSet<String>(
+      new TextFile("TextFile.java", "\\W+"));
+    // Display the capitalized words:
+    System.out.println(words.headSet("a"));
+  }
+}
+```
+
+```
+// VendingMachineInput.txt
+QUARTER; QUARTER; QUARTER; CHIPS;
+DOLLAR; DOLLAR; TOOTHPASTE;
+QUARTER; DIME; ABORT_TRANSACTION;
+QUARTER; DIME; SODA;
+QUARTER; DIME; NICKEL; SODA;
+ABORT_TRANSACTION;
+STOP;
+```
+
+### 多路分发
+
+Java只支持单路分发，也就是说，如果要执行的操作包含了不止一个类型未知的对象时，那么Java的动态绑定机制只能处理其中一个的类型。所以，你必须自己来判定其他的类型，从而实现自己的动态绑定行为。
+
+```
+import java.util.*;
+import java.io.*;
+
+enum Outcome {
+	WIN,
+	LOSE,
+	DRAW
+}
+
+interface Competitor<T extends Competitor<T>> {
+	Outcome compete(T Competitor);
+}
+
+class Enums {
+	private static Random rand = new Random(47);
+
+	public static <T extends Enum<T>> T random(Class<T> ec) {
+		return random(ec.getEnumConstants());
+	}
+
+	public static <T> T random(T[] values) {
+		return values[rand.nextInt(values.length)];
+	}
+}
+
+class RoShamBo {
+	public static <T extends Competitor<T>> void match(T a, T b) {
+		System.out.println(a + " vs. " + b + ": " + a.compete(b));
+	}
+
+	public static <T extends Enum<T> & Competitor<T>> void play(Class<T> rsbclass, int size) {
+		for (int i = 0; i < size; i++) {
+			match(Enums.random(rsbclass), Enums.random(rsbclass));
+		}
+	}
+}
+
+public enum Demo implements Competitor<Demo> {
+	PAPER(Outcome.DRAW, Outcome.LOSE, Outcome.WIN),
+	SCISSORS(Outcome.WIN, Outcome.DRAW, Outcome.LOSE),
+	ROCK(Outcome.LOSE, Outcome.WIN, Outcome.DRAW);
+
+	private Outcome vPaper;
+	private Outcome vScissors;
+	private Outcome vRock;
+
+	Demo(Outcome paper, Outcome scissors, Outcome rock) {
+		vPaper = paper;
+		vScissors = scissors;
+		vRock = rock;
+	}
+
+	public Outcome compete(Demo it) {
+		switch (it) {
+			default:
+			case PAPER: return vPaper;
+			case SCISSORS: return vScissors;
+			case ROCK: return vRock;
+		}
+	}
 
 
+	public static void main(String[] args) {
+		RoShamBo.play(Demo.class, 10);
+	}
+}
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
- 
-
+/*
+ROCK vs. ROCK: DRAW
+SCISSORS vs. ROCK: LOSE
+SCISSORS vs. ROCK: LOSE
+SCISSORS vs. ROCK: LOSE
+PAPER vs. SCISSORS: LOSE
+PAPER vs. PAPER: DRAW
+PAPER vs. SCISSORS: LOSE
+ROCK vs. SCISSORS: WIN
+SCISSORS vs. SCISSORS: DRAW
+ROCK vs. SCISSORS: WIN
+*/
+```
