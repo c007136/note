@@ -1,5 +1,5 @@
 # JAVA编程思想学习9
-> 第20章 ～ 第X章
+> 第20章 ～ 第21章
 
 ## 第20章 注解
 
@@ -678,7 +678,7 @@ Thread[pool-1-thread-4,1,main] countDown: 1 priority: 1
 
 #### 后台线程
 
-后台线程，是指在程序运行的时候在后台提供一种通用服务的线程，并且这种线程并不属于程序中不可或缺的部分。
+后台线程，是指在程序运行的时候在后台提供一种通用服务的线程，并且这种线程并不属于程序中不可或缺的部分。因此，当所有的非后台线程结束时，程序也就终止了，同时会杀死进程中的所有后台线程。
 
 ```
 import java.util.concurrent.*;
@@ -723,6 +723,146 @@ main thread ended Thread[main,5,main]
 */
 ```
 
+使用ThreadFactory
+
+```
+import java.util.concurrent.*;
+
+class DaemonThreadFactory implements ThreadFactory {
+	public Thread newThread(Runnable r) {
+		Thread t = new Thread(r);
+		t.setDaemon(true);
+		return t;
+	}
+}
+
+
+public class Demo implements Runnable {
+	public void run() {
+		try {
+			while (true) {
+				TimeUnit.MILLISECONDS.sleep(10);
+				System.out.println(Thread.currentThread() + " " + this);
+			}
+		} catch (InterruptedException e) {
+			System.out.println("Interrupted");
+		}
+	}
+
+	public static void main(String[] args) throws Exception {
+		ExecutorService es = Executors.newCachedThreadPool(new DaemonThreadFactory());
+		for (int i = 0; i < 10; i++) {
+			es.execute(new Demo());
+		}
+		System.out.println("all deamons started");
+        TimeUnit.MILLISECONDS.sleep(15);
+        System.out.println("main thread ended " + Thread.currentThread());
+	}
+}
+
+
+/*
+all deamons started
+Thread[Thread-1,5,main] Demo@76f1ebbf
+Thread[Thread-7,5,main] Demo@7506f74a
+Thread[Thread-9,5,main] Demo@4045ca95
+Thread[Thread-3,5,main] Demo@14f67d7d
+Thread[Thread-6,5,main] Demo@16d50866
+Thread[Thread-5,5,main] Demo@fafdfea
+Thread[Thread-0,5,main] Demo@a8f72d1
+Thread[Thread-4,5,main] Demo@37ed46b2
+Thread[Thread-2,5,main] Demo@2bc2d139
+Thread[Thread-8,5,main] Demo@40e785a3
+main thread ended Thread[main,5,main]
+*/
+```
+
+### join线程
+一个线程可以在其他线程之上调用`join()`方法，其效果是等待一段时间直到第二个线程结束才继续执行。
+
+`join()`方法的调用可以被中断，调用`interrupt()`方法
+
+参考`concurrency/Joining.java`
+
+
+### 捕获异常
+
+由于线程的本质特性，使得你不能捕获从线程逃逸的异常。一旦异常逃出任务的`run()`方法，它就会向外传播到控制台，哪怕在`main`主体中加入`try-catch`也是没有用的。
+
+```
+import java.util.concurrent.*;
+
+public class Demo implements Runnable {
+	public void run() {
+		throw new RuntimeException();
+	}
+
+	public static void main(String[] args) throws Exception {
+		try {
+			ExecutorService es = Executors.newCachedThreadPool();
+			es.execute(new Demo());
+		} catch (RuntimeException e) {
+			System.out.println("exception is being handled");
+		}
+	}
+}
+```
+
+采用`setUncaughtExceptionHandler`，在程序中添加额外的跟踪机制
+
+```
+import java.util.concurrent.*;
+
+class ExceptionThread implements Runnable {
+  public void run() {
+    Thread t = Thread.currentThread();
+    System.out.println("run() by " + t);
+    System.out.println("eh = " + t.getUncaughtExceptionHandler());
+    throw new RuntimeException();
+  }
+}
+
+class MyUncaughtExceptionHandler implements Thread.UncaughtExceptionHandler {
+  public void uncaughtException(Thread t, Throwable e) {
+    System.out.println("caught " + e);
+  }
+}
+
+class HandlerThreadFactory implements ThreadFactory {
+  public Thread newThread(Runnable r) {
+    System.out.println(this + " creating new Thread");
+    Thread t = new Thread(r);
+    System.out.println("created " + t);
+    t.setUncaughtExceptionHandler(
+      new MyUncaughtExceptionHandler());
+    System.out.println(
+      "eh = " + t.getUncaughtExceptionHandler());
+    return t;
+  }
+}
+
+public class Demo{
+	public static void main(String[] args) throws Exception {
+		ExecutorService exec = Executors.newCachedThreadPool(new HandlerThreadFactory());
+		exec.execute(new ExceptionThread());
+	}
+}
+
+
+/*
+HandlerThreadFactory@5c647e05 creating new Thread
+created Thread[Thread-0,5,main]
+eh = MyUncaughtExceptionHandler@33909752
+run() by Thread[Thread-0,5,main]
+eh = MyUncaughtExceptionHandler@33909752
+HandlerThreadFactory@5c647e05 creating new Thread
+created Thread[Thread-1,5,main]
+eh = MyUncaughtExceptionHandler@fafdfea
+caught java.lang.RuntimeException
+*/
+```
+
+### 共享受限资源
 
 
 
