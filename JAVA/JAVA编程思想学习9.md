@@ -864,6 +864,114 @@ caught java.lang.RuntimeException
 
 ### 共享受限资源
 
+```
+public abstract class IntGenerator {
+	private volatile boolean canceled = false;
+
+	public abstract int next();
+
+	public void cancel() {
+		canceled = true;
+	}
+
+	public boolean isCanceled() {
+		return canceled;
+	}
+}
+```
+
+```
+import java.util.concurrent.*;
+
+public class EvenChecker implements Runnable {
+	private IntGenerator generator;
+
+	private final int id;
+
+	public EvenChecker(IntGenerator g, int ident) {
+		generator = g;
+		id = ident;
+	}
+
+	public void run() {
+		while (!generator.isCanceled()) {
+			int val = generator.next();
+			// 加上这句话就感觉可以无限循环了
+			//System.out.println("id is " + id + " val is " + val + " current thread is " + Thread.currentThread());
+			if (val % 2 != 0) {
+				System.out.println("id is " + id + " val is " + val + " not even current thread is " + Thread.currentThread());
+				generator.cancel();
+			}
+		}
+	}
+
+	public static void test(IntGenerator g, int count) {
+		System.out.println("Press Conctol-C to exit");
+		ExecutorService es = Executors.newCachedThreadPool();
+		for (int i = 0; i < count; i++) {
+			es.execute(new EvenChecker(g, i));
+		}
+		es.shutdown();
+	}
+
+	public static void test(IntGenerator g) {
+		test(g, 10);
+	}
+}
+```
+
+```
+import java.util.concurrent.*;
+
+class EvenGenerator extends IntGenerator {
+	private int currentEvenvalue = 0;
+
+	public int next() {
+		++currentEvenvalue;
+		++currentEvenvalue;
+		return currentEvenvalue;
+	}
+}
+
+
+public class Demo {
+	public static void main(String[] args) {
+		EvenChecker.test(new EvenGenerator());
+	}
+}
+```
+
+
+```
+public class Demo implements Runnable {
+	private int i = 0;
+	public int getValue() { return i; }
+
+	private synchronized void evenIncrement() {
+		i++;
+		i++;
+	}
+
+	public void run() {
+		while (true) {
+			evenIncrement();
+		}
+	}
+
+	public static void main(String[] args) {
+		ExecutorService es = Executors.newCachedThreadPool();
+		Demo d = new Demo();
+		es.execute(d);
+		while (true) {
+			int value = d.getValue();
+			if (value % 2 != 0) {
+				System.out.println(value);
+				System.exit(0);
+			}
+		}
+	}
+}
+```
 
 
 
