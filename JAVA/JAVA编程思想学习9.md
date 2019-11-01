@@ -784,6 +784,52 @@ main thread ended Thread[main,5,main]
 
 参考`concurrency/Joining.java`
 
+```
+import java.util.concurrent.*;
+
+public class Demo {
+	public static void main(String[] args) {
+		Thread previousThread = Thread.currentThread();
+		for (int i = 0; i < 10; i++) {
+			Thread currentThread = new JoinThread(previousThread);
+			currentThread.start();
+			previousThread = currentThread;
+		}
+	}
+
+	private static class JoinThread extends Thread {
+		private Thread thread;
+
+		public JoinThread(Thread thread) {
+			this.thread = thread;
+		}
+
+		@Override
+		public void run() {
+			try {
+				thread.join();
+				System.out.println(thread.getName() + " terminated.");
+			} catch (InterruptedException e) {
+				e.printStackTrace();
+			}
+		}
+	}
+}
+
+/*
+main terminated.
+Thread-0 terminated.
+Thread-1 terminated.
+Thread-2 terminated.
+Thread-3 terminated.
+Thread-4 terminated.
+Thread-5 terminated.
+Thread-6 terminated.
+Thread-7 terminated.
+Thread-8 terminated.
+*/
+```
+
 
 ### 捕获异常
 
@@ -926,8 +972,9 @@ import java.util.concurrent.*;
 class EvenGenerator extends IntGenerator {
 	private int currentEvenvalue = 0;
 
-	public int next() {
-		++currentEvenvalue;
+	public /*synchronized*/ int next() {
+		++currentEvenvalue;      // Danger point here
+		// Thread.yield();
 		++currentEvenvalue;
 		return currentEvenvalue;
 	}
@@ -940,6 +987,14 @@ public class Demo {
 	}
 }
 ```
+
+一个任务有可能在另一个任务执行第一个对`currentEvenvalue`的递增操作之后，但是没有执行第二个操作之前，调用`next()`方法。这将使这个值处于“不恰当”的状态。
+
+Brian的同步规则：
+
+> 如果你正在写一个变量，它可能接下来将被另一个线程读取，或者正在读取一个上一次已经被另一个线程写过的变量，那么你必须使用同步，并且，读写线程都必须用相同的监视器同步。
+
+### 使用显式的Lock对象
 
 
 ```
@@ -973,6 +1028,1281 @@ public class Demo implements Runnable {
 }
 ```
 
+### 原子性与易变性
+
+原子性是指某个操作，要么让这个操作执行完，要么就不执行这个操作。
+
+Java中对变量的读取和赋值都是原子操作，但long、double类型除外，只有使用volatile修饰之后long、double类型的读取和赋值操作才具有原子性。
+
+易变性有两层含义：
+1. 可见性
+2. 有序性
+
+
+#### 可见性
+
+Java虚拟机会为每个线程分配一块专属的内存，称之为工作内存；不同的线程之间共享的数据会被放到主内存中。工作内存主要包含方法的参数、局部变量（在函数中定义的变量），这些变量都是线程私有的，不会被其他线程共用。实例的属性、类的静态属性都是可以被共享的，每个线程在操作这些数据都是先从主内存中读取到工作内存再进行操作，操作结束后再写入到主内存中。可见性要求线程对共享变量修改后立即写入到主内存中，线程读取共享变量时也必须去主内存中重新加载，不能直接使用工作内存中的值。
+
+
+```
+import java.util.concurrent.*;
+
+class NewThread implements Runnable {
+	public /*volatile*/ static long value;
+
+	public void run() {
+		while (Demo.run) {
+			value++;
+		}
+		System.out.println("Done");
+	}
+}
+
+public class Demo {
+	public /*volatile*/ static boolean run = true;
+
+	public static void main(String[] args) throws Exception {
+		ExecutorService es = Executors.newCachedThreadPool();
+		es.execute(new NewThread());
+		es.shutdown();
+		Thread.sleep(100);
+		run = false;
+		System.out.println("run: " + run);
+		System.out.println("value: " + NewThread.value);
+		Thread.sleep(100);
+		System.out.println("value: " + NewThread.value);
+	}
+}
+```
+
+#### 有序性
+
+易变性另一层含义就是有序性，是指禁止CPU对指令重排优化，默认情况下CPU会对指令进行合理的重排优化，重排优化仅保证单线程运行时结果的正确性，不保证执行顺序。
+
+### 临界区
+
+防止多个线程同时访问方法内部的部分代码而不是防止访问整个方法。这一部分代码被称为临界区。这也被称为同步控制块。
+
+```
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.*;
+import java.util.*;
+
+class Pair {
+	private int x;
+	private int y;
+
+	public Pair(int x, int y) {
+		this.x = x;
+		this.y = y;
+	}
+
+	public Pair() {
+		this(0, 0);
+	}
+
+	public int getX() {
+		return x;
+	}
+
+	public int getY() {
+		return y;
+	}
+
+	public void incrementX() {
+		x++;
+	}
+
+	public void incrementY() {
+		y++;
+	}
+
+	public String toString() {
+		return "x: " + x + ", y: " + y;
+	}
+
+	public void checkState() {
+		if (x != y) {
+			throw new PairValuesNotEqualException();
+		}
+	}
+
+	public class PairValuesNotEqualException extends RuntimeException {
+		public PairValuesNotEqualException() {
+			super("Pair values not equal: " + Pair.this);
+		}
+	}
+}
+
+abstract class PairManager {
+	AtomicInteger checkCounter = new AtomicInteger(0);
+
+	protected Pair p = new Pair();
+
+	private List<Pair> storage = Collections.synchronizedList(new ArrayList<Pair>());
+
+	public synchronized Pair getPair() {
+		return new Pair(p.getX(), p.getY());
+	}
+
+	protected void store(Pair p) {
+		storage.add(p);
+
+		try {
+			TimeUnit.MILLISECONDS.sleep(50);
+		} catch (InterruptedException e) {
+
+		}
+	}
+
+	public abstract void increment();
+}
+
+class PairManager1 extends PairManager {
+	public synchronized void increment() {
+		p.incrementX();
+		p.incrementY();
+		store(getPair());
+	}
+}
+
+class PairManager2 extends PairManager {
+	// 同步代码块会比同步整个方法运行得多一些
+	public void increment() {
+		Pair temp;
+		synchronized (this) {
+			p.incrementX();
+			p.incrementY();
+			temp = getPair();
+		}
+		store(temp);
+	}
+}
+
+class PairManipulator implements Runnable {
+	private PairManager pm;
+
+	public PairManipulator(PairManager pm) {
+		this.pm = pm;
+	}
+
+	public void run() {
+		while (true) {
+			pm.increment();
+		}
+	}
+
+	public String toString() {
+		return "Pair: " + pm.getPair() + " checkCounter = " + pm.checkCounter.get();
+	}
+}
+
+// 跟踪运行测试的频度
+class PairChecker implements Runnable {
+	private PairManager pm;
+
+	public PairChecker(PairManager pm) {
+		this.pm = pm;
+	}
+
+	public void run() {
+		while (true) {
+			pm.checkCounter.incrementAndGet();
+			pm.getPair().checkState();
+		}
+	}
+}
+
+
+public class Demo {
+	static void testApproaches(PairManager p1, PairManager p2) {
+		ExecutorService es = Executors.newCachedThreadPool();
+
+		PairManipulator pm1 = new PairManipulator(p1);
+		PairManipulator pm2 = new PairManipulator(p2);
+
+		PairChecker pc1 = new PairChecker(p1);
+		PairChecker pc2 = new PairChecker(p2);
+
+		es.execute(pm1);
+		es.execute(pm2);
+		es.execute(pc1);
+		es.execute(pc2);
+
+		es.shutdown();
+
+		try {
+			TimeUnit.MILLISECONDS.sleep(100);
+		} catch (InterruptedException e) {
+			System.out.println("sleep interrupted");
+		}
+
+		System.out.println("pm1: " + pm1 + "\npm2: " + pm2);
+		System.exit(0);
+	}
+
+
+	public static void main(String[] args) {
+		PairManager p1 = new PairManager1();
+		PairManager p2 = new PairManager2();
+		testApproaches(p1, p2);
+	}
+}
+
+
+/*
+pm1: Pair: x: 200, y: 200 checkCounter = 56
+pm2: Pair: x: 201, y: 201 checkCounter = 669459870
+*/
+``` 
+
+上面的`PairManager`类的结构，它的一些功能在基类中实现，并且其一个或多个抽象方法在派生类中定义，这种结构在设计模式中称为模板方法。
+
+muyu: ？？？？？
+
+
+## 在其他对象上同步
+
+```
+import java.util.concurrent.*;
+import java.util.concurrent.locks.*;
+import java.util.concurrent.atomic.*;
+import java.util.*;
+
+class DualSynch {
+	private Object syncObject = new Object();
+
+	public synchronized void f() {
+		for (int i = 0; i < 5; i++) {
+			System.out.println("f() " + Thread.currentThread());
+			Thread.yield();
+		}
+	}
+
+	public void g() {
+		synchronized (syncObject) {
+			for (int i = 0; i < 5; i++) {
+				System.out.println("g() " + Thread.currentThread());
+				Thread.yield();
+			}
+		}
+	}
+}
+
+
+public class Demo {
+	public static void main(String[] args) {
+		final DualSynch ds = new DualSynch();
+		new Thread() {
+			public void run() {
+				ds.f();
+			}
+		}.start();
+		ds.g();
+	}
+}
+
+
+/*
+g() Thread[main,5,main]
+f() Thread[Thread-0,5,main]
+f() Thread[Thread-0,5,main]
+g() Thread[main,5,main]
+f() Thread[Thread-0,5,main]
+g() Thread[main,5,main]
+g() Thread[main,5,main]
+f() Thread[Thread-0,5,main]
+g() Thread[main,5,main]
+f() Thread[Thread-0,5,main]
+*/
+```
+
+`synchronized(this)`后，那么其他的`synchronized`方法和临界区就不能被调用了。
+
+### 线程本地存储
+
+```
+import java.util.concurrent.*;
+import java.util.*;
+
+class Accessor implements Runnable {
+	private final int id;
+
+	public Accessor(int id) {
+		this.id = id;
+	}
+
+	public void run() {
+		boolean b = Thread.currentThread().isInterrupted();
+		while(!b) {
+			Demo.increment();
+			System.out.println(this);
+			Thread.yield();
+		}
+	}
+
+	public String toString() {
+		return "#" + id + ":" + Demo.get();
+	}
+}
+
+public class Demo {
+	private static ThreadLocal<Integer> value = new ThreadLocal<Integer>() {
+		private Random rand = new Random(26);
+		// 初始值
+		protected Integer initialValue() {
+			Integer i = rand.nextInt(100000);
+			System.out.println("initialValue is " + i + " currentThread is " + Thread.currentThread());
+			return i;
+		}
+	};
+
+	public static void increment() {
+		value.set(value.get() + 1);
+	}
+
+	public static int get() {
+		return value.get();
+	}
+
+	public static void main(String[] args) throws Exception {
+		ExecutorService es = Executors.newCachedThreadPool();
+		for (int i = 0; i < 5; i++) {
+			es.execute(new Accessor(i));
+		}
+		TimeUnit.MILLISECONDS.sleep(5);  // Run for a while
+		es.shutdownNow();              // All Accessors will quit
+		System.exit(1);
+	}
+}
+
+
+/*
+initialValue is 65104 currentThread is Thread[pool-1-thread-2,5,main]
+initialValue is 10493 currentThread is Thread[pool-1-thread-1,5,main]
+#0:10494
+initialValue is 1532 currentThread is Thread[pool-1-thread-5,5,main]
+initialValue is 50364 currentThread is Thread[pool-1-thread-3,5,main]
+#2:50365
+initialValue is 77139 currentThread is Thread[pool-1-thread-4,5,main]
+#4:1533
+#0:10495
+#1:65105
+#0:10496
+......
+*/
+```
+
+ThreadLocal创建的变量只能给自己使用。
+
+### 终止任务
+
+```
+import java.util.concurrent.*;
+import java.util.*;
+
+class Count {
+	private int count = 0;
+	private Random rand = new Random(26);
+
+	public synchronized int increment() {
+		int temp = count;
+		if (rand.nextBoolean()) {
+			Thread.yield();
+		}
+		return (count = ++temp);
+	}
+
+	public synchronized int value() {
+		return count;
+	}
+}
+
+class Entrance implements Runnable {
+	private static Count count = new Count();
+	private static List<Entrance> entrances = new ArrayList<Entrance>();
+	private int number = 0;
+	private final int id;
+	private static volatile boolean canceled = false;
+
+	public static void cancel() {
+		canceled = true;
+	}
+
+	public Entrance(int id) {
+		this.id = id;
+		entrances.add(this);
+	}
+
+	public void run() {
+		while (!canceled) {
+			synchronized(this) {
+				++number;
+			}
+			System.out.println(this + " Total: " + count.increment());
+			try {
+				TimeUnit.MILLISECONDS.sleep(100);
+			} catch (InterruptedException e) {
+				System.out.println("sleep interrupted");
+			}
+		}
+		System.out.println("Stopping " + this);
+	}
+
+	public synchronized int getValue() {
+		return number;
+	}
+
+	public String toString() {
+		return "Entrance " + id + ": " + getValue();
+	}
+
+	public static int getTotalCount() {
+		return count.value();
+	}
+
+	public static int sumEntrances() {
+		int sum = 0;
+		for (Entrance e : entrances) {
+			sum += e.getValue();
+		}
+		return sum;
+	}
+}
+
+public class Demo {
+	public static void main(String[] args) throws Exception {
+		ExecutorService es = Executors.newCachedThreadPool();
+		for (int i = 0; i < 5; i++) {
+			es.execute(new Entrance(i));
+		}
+		TimeUnit.SECONDS.sleep(3);
+		Entrance.cancel();
+		es.shutdown();
+		if (!es.awaitTermination(250, TimeUnit.MILLISECONDS)) {
+			System.out.println("Some tasks were not terminated!");
+		}
+		System.out.println("Total: " + Entrance.getTotalCount());
+		System.out.println("Sum of Entrances: " + Entrance.sumEntrances());
+	}
+}
+```
+
+### 在阻塞时终结
+
+进入阻塞状态的原因：
+
+1. 调用`sleep`
+2. 调用`wait`，直到线程得到`notify`或`notifyAll`
+3. 任务在等待某个输入/输出完成
+4. 任务试图在某个对象上调用同步控制方法，但是对象锁不可用，因为另一个任务已经获取了锁
+
+中断：Future对象可以中断线程
+
+```
+import java.util.concurrent.*;
+import java.io.*;
+
+class SleepBlocked implements Runnable {
+	public void run() {
+		try {
+			TimeUnit.SECONDS.sleep(100);
+		} catch (InterruptedException e) {
+			System.out.println("SleepBlocked InterruptedException");
+		}
+		System.out.println("Exiting SleepBlocked.run()");
+	}
+}
+
+class IOBlocked implements Runnable {
+	private InputStream in;
+
+	public IOBlocked(InputStream in) {
+		this.in = in;
+	}
+
+	public void run() {
+		try {
+			System.out.println("Waiting for read():");
+			in.read();
+		} catch (IOException e) {
+			if(Thread.currentThread().isInterrupted()) {
+				System.out.println("Interrupted from blocked I/O");
+			} else {
+				throw new RuntimeException(e);
+			}
+		}
+		System.out.println("Exiting IOBlocked.run()");
+	}
+}
+
+class SynchronizedBlocked implements Runnable {
+	public synchronized void f() {
+		while (true) {
+			Thread.yield();
+		}
+	}
+
+	public SynchronizedBlocked() {
+		new Thread() {
+			public void run() {
+				f();
+			}
+		}.start();
+	}
+
+	public void run() {
+		System.out.println("Trying to call f()");
+		f();
+		System.out.println("Exiting SynchronizedBlocked.run()");
+	}
+}
+
+public class Demo {
+	private static ExecutorService es = Executors.newCachedThreadPool();
+
+	public static void test(Runnable r) throws InterruptedException {
+		Future<?> f = es.submit(r);
+		TimeUnit.MILLISECONDS.sleep(100);
+		System.out.println("Interrupting " + r.getClass().getName());
+		f.cancel(true);
+		System.out.println("Interrupt sent to " + r.getClass().getName());
+	}
+
+
+	public static void main(String[] args) throws Exception {
+		test(new SleepBlocked());
+		test(new IOBlocked(System.in));
+		test(new SynchronizedBlocked());
+		TimeUnit.SECONDS.sleep(3);
+		System.out.println("Aborting with System.exit(0)");
+		System.exit(0);
+	}
+}
+
+
+/*
+Interrupting SleepBlocked
+Interrupt sent to SleepBlocked
+SleepBlocked InterruptedException
+Exiting SleepBlocked.run()
+Waiting for read():
+Interrupting IOBlocked
+Interrupt sent to IOBlocked
+Trying to call f()
+Interrupting SynchronizedBlocked
+Interrupt sent to SynchronizedBlocked
+Aborting with System.exit(0)
+*/
+```
+
+从输出中可以看出，你能够中断`sleep()`的调用，但不能中断`synchronized `和I/O操作的线程，这意味着I/O操作具有锁住你的多线程的潜在可能。
+
+```
+// IO是阻塞的，NIO是非阻塞的
+
+import java.util.concurrent.*;
+import java.io.*;
+import java.net.*;
+import java.nio.*;
+import java.nio.channels.*;
+
+class NIOBlocked implements Runnable {
+	private final SocketChannel sc;
+
+	public NIOBlocked(SocketChannel sc) {
+		this.sc = sc;
+	}
+
+	public void run() {
+		try {
+			System.out.println("Waiting for read() in " + this);
+			sc.read(ByteBuffer.allocate(1));
+		} catch (ClosedByInterruptException e) {
+			System.out.println("ClosedByInterruptException");
+		} catch (AsynchronousCloseException e) {
+			System.out.println("AsynchronousCloseException");
+		} catch (IOException e) {
+			throw new RuntimeException(e);
+		}
+		System.out.println("Exiting NIOBlocked.run() " + this);
+	}
+}
+
+public class Demo {
+	public static void main(String[] args) throws Exception {
+		ExecutorService es = Executors.newCachedThreadPool();
+		ServerSocket ss = new ServerSocket(8080);
+		InetSocketAddress isa = new InetSocketAddress("localhost", 8080);
+		SocketChannel sc1 = SocketChannel.open(isa);
+		SocketChannel sc2 = SocketChannel.open(isa);
+		Future<?> f = es.submit(new NIOBlocked(sc1));
+		es.execute(new NIOBlocked(sc2));
+		es.shutdown();
+		TimeUnit.SECONDS.sleep(1);
+		f.cancel(true);
+		TimeUnit.SECONDS.sleep(1);
+		sc2.close();
+	}
+}
+
+
+/*
+Waiting for read() in NIOBlocked@7eb4afb1
+Waiting for read() in NIOBlocked@5645c898
+ClosedByInterruptException
+Exiting NIOBlocked.run() NIOBlocked@7eb4afb1
+AsynchronousCloseException
+Exiting NIOBlocked.run() NIOBlocked@5645c898
+*/
+```
+
+### 被互斥所阻塞
+
+下面的示例说明了同一个互斥可以被同一个任务多次获得。
+
+```
+public class Demo {
+	public synchronized void f1(int count) {
+		if (count-- > 0) {
+			System.out.println("f1() calling f2() with count " + count);
+			f2(count);
+		}
+	}
+
+	public synchronized void f2(int count) {
+		if (count-- > 0) {
+			System.out.println("f2() calling f1() with count " + count);
+			f1(count);
+		}
+	}
+
+
+	public static void main(String[] args) throws Exception {
+		final Demo multiLock = new Demo();
+		new Thread() {
+			public void run() {
+				multiLock.f1(10);
+			}
+		}.start();
+	}
+}
+
+
+/*
+f1() calling f2() with count 9
+f2() calling f1() with count 8
+f1() calling f2() with count 7
+f2() calling f1() with count 6
+f1() calling f2() with count 5
+f2() calling f1() with count 4
+f1() calling f2() with count 3
+f2() calling f1() with count 2
+f1() calling f2() with count 1
+f2() calling f1() with count 0
+*/
+```
+
+**非多线程**就是按顺序执行啊？？？
+
+### Lock是可被中断的
+
+```
+import java.util.concurrent.*;
+import java.util.concurrent.locks.*;
+
+class BlockedMutex {
+	private Lock lock = new ReentrantLock();
+
+	public BlockedMutex() {
+		lock.lock();
+	}
+
+	public void f() {
+		try {
+			lock.lockInterruptibly();
+			System.out.println("lock acquired in f()");
+		} catch (InterruptedException e) {
+			System.out.println("Interrupted from lock acquisition in f()");
+		}
+	}
+}
+
+class Blocked implements Runnable {
+	BlockedMutex blocked = new BlockedMutex();
+
+	public void run() {
+		System.out.println("Waiting for f() in BlockedMutex");
+		blocked.f();
+		System.out.println("Broken out of blocked call");
+	}
+}
+
+public class Demo {
+	public static void main(String[] args) throws Exception {
+		Thread t = new Thread(new Blocked());
+		t.start();
+		TimeUnit.SECONDS.sleep(1);
+		System.out.println("Issuing t.interrupt()");
+		t.interrupt();
+	}
+}
+
+
+/*
+Waiting for f() in BlockedMutex
+Issuing t.interrupt()
+Interrupted from lock acquisition in f()
+Broken out of blocked call
+*/
+```
+
+### wait()与notifyAll()
+
+```
+import java.util.concurrent.*;
+
+class Car {
+	private boolean waxOn = false;
+
+	public synchronized void waxed() {
+		waxOn = true;
+		notifyAll();
+	}
+
+	public synchronized void buffed() {
+		waxOn = false;
+		notifyAll();
+	}
+
+	public synchronized void waitForWaxing() throws InterruptedException {
+		while (waxOn == false) {
+			wait();
+		}
+	}
+
+	public synchronized void waitForBuffing() throws InterruptedException {
+		while (waxOn == true) {
+			wait();
+		}
+	}
+}
+
+class WaxOn implements Runnable {
+	private Car car;
+
+	public WaxOn(Car c) {
+		car = c;
+	}
+
+	public void run() {
+		try {
+			while (!Thread.interrupted()) {
+				System.out.println("Wax On! ");
+				TimeUnit.MILLISECONDS.sleep(200);
+				car.waxed();
+				car.waitForBuffing();
+			}
+		} catch (InterruptedException e) {
+			System.out.println("Exiting via interrupt");
+		}
+		System.out.println("Ending Wax On task");
+	}
+}
+
+class WaxOff implements Runnable {
+	private Car car;
+
+	public WaxOff(Car c) {
+		car = c;
+	}
+
+	public void run() {
+		try {
+			while (!Thread.interrupted()) {
+				car.waitForWaxing();
+				System.out.println("Wax Off! ");
+				TimeUnit.MILLISECONDS.sleep(200);
+				car.buffed();
+			}
+		} catch (InterruptedException e) {
+			System.out.println("Exiting via interrupt");
+		}
+		System.out.println("Ending Wax Off task");
+	}
+}
+
+public class Demo {
+	public static void main(String[] args) throws Exception {
+		Car car = new Car();
+		ExecutorService es = Executors.newCachedThreadPool();
+		es.execute(new WaxOff(car));
+		es.execute(new WaxOn(car));
+		TimeUnit.SECONDS.sleep(5);
+		es.shutdown();
+	}
+}
+
+
+/*
+Wax On! 
+Wax Off! 
+Wax On! 
+Wax Off! 
+......
+*/
+```
+
+### notify和notifyAll
+
+```
+import java.util.concurrent.*;
+import java.util.*;
+
+class Blocker {
+	synchronized void waitingCall() {
+		try {
+			while (!Thread.interrupted()) {
+				wait();
+				System.out.print(Thread.currentThread() + " ");
+			}
+		} catch (InterruptedException e) {
+
+		}
+	}
+
+	synchronized void prod() {
+		notify();
+	}
+
+	synchronized void prodAll() {
+		notifyAll();
+	}
+}
+
+class Task implements Runnable {
+	static Blocker blocker = new Blocker();
+
+	public void run() {
+		blocker.waitingCall();
+	}
+}
+
+class Task2 implements Runnable {
+	static Blocker blocker = new Blocker();
+
+	public void run() {
+		blocker.waitingCall();
+	}
+}
+
+public class Demo {
+	public static void main(String[] args) throws Exception {
+		ExecutorService es = Executors.newCachedThreadPool();
+		for (int i = 0; i < 5; i++) {
+			es.execute(new Task());
+		}
+		es.execute(new Task2());
+
+		Timer timer = new Timer();
+		timer.scheduleAtFixedRate(new TimerTask() {
+			boolean prod = true;
+			public void run() {
+				if (prod) {
+					System.out.print("\nnotify() ");
+					Task.blocker.prod();
+					prod = false;
+				} else {
+					System.out.print("\nnotifyAll() ");
+					Task.blocker.prodAll();
+					prod = true;
+				}
+			}
+		}, 400, 400);
+		TimeUnit.SECONDS.sleep(5);
+		timer.cancel();
+		System.out.println("\nTimer canceled");
+		TimeUnit.MILLISECONDS.sleep(500);
+		System.out.print("Task2.blocker.prodAll() ");
+		Task2.blocker.prodAll();
+		TimeUnit.MILLISECONDS.sleep(500);
+		System.out.print("\nShutting down");
+		es.shutdown();
+		System.exit(0);
+	}
+}
+
+
+/*
+
+notify() Thread[pool-1-thread-1,5,main] 
+notifyAll() Thread[pool-1-thread-1,5,main] Thread[pool-1-thread-5,5,main] Thread[pool-1-thread-4,5,main] Thread[pool-1-thread-3,5,main] Thread[pool-1-thread-2,5,main] 
+notify() Thread[pool-1-thread-1,5,main] 
+notifyAll() Thread[pool-1-thread-1,5,main] Thread[pool-1-thread-2,5,main] Thread[pool-1-thread-3,5,main] Thread[pool-1-thread-4,5,main] Thread[pool-1-thread-5,5,main] 
+notify() Thread[pool-1-thread-1,5,main] 
+notifyAll() Thread[pool-1-thread-1,5,main] Thread[pool-1-thread-5,5,main] Thread[pool-1-thread-4,5,main] Thread[pool-1-thread-3,5,main] Thread[pool-1-thread-2,5,main] 
+notify() Thread[pool-1-thread-1,5,main] 
+notifyAll() Thread[pool-1-thread-1,5,main] Thread[pool-1-thread-2,5,main] Thread[pool-1-thread-3,5,main] Thread[pool-1-thread-4,5,main] Thread[pool-1-thread-5,5,main] 
+notify() Thread[pool-1-thread-1,5,main] 
+notifyAll() Thread[pool-1-thread-1,5,main] Thread[pool-1-thread-5,5,main] Thread[pool-1-thread-4,5,main] Thread[pool-1-thread-3,5,main] Thread[pool-1-thread-2,5,main] 
+notify() Thread[pool-1-thread-1,5,main] 
+notifyAll() Thread[pool-1-thread-1,5,main] Thread[pool-1-thread-2,5,main] Thread[pool-1-thread-3,5,main] Thread[pool-1-thread-4,5,main] Thread[pool-1-thread-5,5,main] 
+Timer canceled
+Task2.blocker.prodAll() Thread[pool-1-thread-6,5,main] 
+*/
+```
+
+### 生产者与消费者
+
+#### wait/notify方案
+
+```
+//Restaurant.java
+
+import java.util.concurrent.*;
+import java.util.*;
+
+class Meal {
+	private final int orderNum;
+
+	public Meal(int orderNum) {
+		this.orderNum = orderNum;
+	}
+
+	public String toString() {
+		return "Meal " + orderNum;
+	}
+}
+
+class WaitPerson implements Runnable {
+	private Restaurant restaurant;
+
+	public WaitPerson(Restaurant r) {
+		restaurant = r;
+	}
+
+	public void run() {
+		try {
+			while (!Thread.interrupted()) {
+				synchronized (this) {
+					while (restaurant.meal == null) {
+						wait();
+					}
+				}
+				System.out.println("Waitperson got " + restaurant.meal);
+				synchronized (restaurant.chef) {
+					restaurant.meal = null;
+					restaurant.chef.notifyAll();
+				}
+			}
+		} catch (InterruptedException e) {
+			System.out.println("WaitPerson interrupted");
+		}
+	}
+}
+
+class Chef implements Runnable {
+	private Restaurant restaurant;
+	private int count = 0;
+
+	public Chef(Restaurant r) {
+		restaurant = r;
+	}
+
+	public void run() {
+		try {
+			while (!Thread.interrupted()) {
+				synchronized (this) {
+					while (restaurant.meal != null) {
+						wait();
+					}
+				}
+				if (++count == 10) {
+					System.out.println("Out of food, closing");
+					restaurant.es.shutdownNow();
+				}
+				System.out.println("Order up! ");
+				synchronized (restaurant.waitPerson) {
+					restaurant.meal = new Meal(count);
+					restaurant.waitPerson.notifyAll();
+				}
+				TimeUnit.MILLISECONDS.sleep(100);
+			}
+		} catch (InterruptedException e) {
+			System.out.println("Chef interrupted");
+		}
+	}
+}
+
+class Restaurant {
+	Meal meal;
+	ExecutorService es = Executors.newCachedThreadPool();
+	WaitPerson waitPerson = new WaitPerson(this);
+	Chef chef = new Chef(this);
+
+	public Restaurant() {
+		es.execute(chef);
+		es.execute(waitPerson);
+	}
+}
+
+public class Demo {
+	public static void main(String[] args) throws Exception {
+		new Restaurant();
+	}
+}
+
+
+/*
+Order up! 
+Waitperson got Meal 1
+Order up! 
+Waitperson got Meal 2
+Order up! 
+Waitperson got Meal 3
+Order up! 
+Waitperson got Meal 4
+Order up! 
+Waitperson got Meal 5
+Order up! 
+Waitperson got Meal 6
+Order up! 
+Waitperson got Meal 7
+Order up! 
+Waitperson got Meal 8
+Order up! 
+Waitperson got Meal 9
+Out of food, closing
+Order up! 
+WaitPerson interrupted
+Chef interrupted
+*/
+```
+
+### Lock和Condition对象
+
+```
+// WaxOMatic2.java
+
+import java.util.concurrent.*;
+import java.util.concurrent.locks.*;
+
+class Car {
+	private boolean waxOn = false;
+	private Lock lock = new ReentrantLock();
+	private Condition condition = lock.newCondition();
+
+	public void waxed() {
+		lock.lock();
+		try {
+			waxOn = true;
+			condition.signalAll();
+		} finally {
+			lock.unlock();
+		}
+	}
+
+	public void buffed() {
+		lock.lock();
+		try {
+			waxOn = false;
+			condition.signalAll();
+		} finally {
+			lock.unlock();
+		}
+	}
+
+	public void waitForWaxing() throws InterruptedException {
+		lock.lock();
+		try {
+			while (waxOn == false) {
+				condition.await();
+			}
+		} finally {
+			lock.unlock();
+		}
+	}
+
+	public void waitForBuffing() throws InterruptedException {
+		lock.lock();
+		try {
+			while (waxOn == true) {
+				condition.await();
+			}
+		} finally {
+			lock.unlock();
+		}
+	}
+}
+
+class WaxOn implements Runnable {
+	private Car car;
+
+	public WaxOn(Car c) {
+		car = c;
+	}
+
+	public void run() {
+		try {
+			while (!Thread.interrupted()) {
+				System.out.println("Wax On! ");
+				TimeUnit.MILLISECONDS.sleep(200);
+				car.waxed();
+				car.waitForBuffing();
+			}
+		} catch (InterruptedException e) {
+			System.out.println("Exiting via interrupt");
+		}
+		System.out.println("Ending Wax On task");
+	}
+}
+
+class WaxOff implements Runnable {
+	private Car car;
+
+	public WaxOff(Car c) {
+		car = c;
+	}
+
+	public void run() {
+		try {
+			while (!Thread.interrupted()) {
+				car.waitForWaxing();
+				System.out.println("Wax Off! ");
+				TimeUnit.MILLISECONDS.sleep(200);
+				car.buffed();
+			}
+		} catch (InterruptedException e) {
+			System.out.println("Exiting via interrupt");
+		}
+		System.out.println("Ending Wax Off task");
+	}
+}
+
+public class Demo {
+	public static void main(String[] args) throws Exception {
+		Car car = new Car();
+		ExecutorService es = Executors.newCachedThreadPool();
+		es.execute(new WaxOff(car));
+		es.execute(new WaxOn(car));
+		TimeUnit.SECONDS.sleep(5);
+		es.shutdownNow();
+	}
+}
+
+
+/*
+Wax On! 
+Wax Off! 
+Wax On! 
+Wax Off! 
+Wax On! 
+Wax Off! 
+Wax On! 
+Wax Off! 
+Wax On! 
+Wax Off! 
+Wax On! 
+Wax Off! 
+Wax On! 
+Wax Off! 
+Wax On! 
+Wax Off! 
+Wax On! 
+Wax Off! 
+Wax On! 
+Wax Off! 
+Wax On! 
+Wax Off! 
+Wax On! 
+Wax Off! 
+Wax On! 
+Exiting via interrupt
+Ending Wax Off task
+Exiting via interrupt
+Ending Wax On task
+*/
+```
+
+### 生产者-消费者与队列
+
+LinkedBlockingQueue、ArrayBlockingQueue和SynchronousQueue
+
+```
+// TestBlockingQueues.java
+
+import java.util.concurrent.*;
+import java.io.*;
+
+class LiftOffRunner implements Runnable {
+	private BlockingQueue<LiftOff> rockets;
+
+	public LiftOffRunner(BlockingQueue<LiftOff> queue) {
+		rockets = queue;
+	}
+
+	public void add(LiftOff lo) {
+		try {
+			rockets.put(lo);
+		} catch(InterruptedException e) {
+	        System.out.println("Interrupted during put()");
+	    }
+	}
+
+	public void run() {
+		try {
+			while (!Thread.interrupted()) {
+				LiftOff rocket = rockets.take();
+				rocket.run();
+			}
+		} catch(InterruptedException e) {
+	        System.out.println("Interrupted during run()");
+	    }
+	    System.out.println("Exiting LiftOffRunner");
+	}
+}
+
+public class Demo {
+	static void getkey() {
+		try {
+			new BufferedReader(new InputStreamReader(System.in)).readLine();
+		} catch (IOException e) {
+			throw new RuntimeException(e);
+		}
+	}
+
+	static void getkey(String message) {
+		System.out.println(message);
+		getkey();
+	}
+
+	static void test(String msg, BlockingQueue<LiftOff> queue) {
+		System.out.println(msg);
+		LiftOffRunner runner = new LiftOffRunner(queue);
+		Thread t = new Thread(runner);
+		t.start();
+		for (int i = 0; i < 5; i++) {
+			runner.add(new LiftOff(5));
+		}
+		getkey("Press 'Enter' (" + msg + ")");
+		t.interrupt();
+		System.out.println("Finished " + msg + " test");
+	}
+
+
+	public static void main(String[] args) throws Exception {
+		test("LinkedBlockingQueue", new LinkedBlockingQueue<LiftOff>());
+		test("ArrayBlockingQueue", new ArrayBlockingQueue<LiftOff>(3));
+		test("SynchronousQueue", new SynchronousQueue<LiftOff>());
+	}
+}
+
+
+/*
+*/
+```
+
+### 死锁
 
 
 
