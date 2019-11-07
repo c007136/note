@@ -3,6 +3,7 @@
 简而言之，`InheritedWidget`可以在`Widget`树中有效地向下传递信息。`InheritedWidget`是一种特殊的`Widget`，可以将其插入`Widget`树中，作为一个`Widget`子树的父节点。该子树的所有`Widget`都能访问`InheritedWidget`的公共数据。
 
 考虑如下代码：
+
 ```
 class MyInheritedWidget extends InheritedWidget {
    MyInheritedWidget({
@@ -35,15 +36,6 @@ class MyInheritedWidget extends InheritedWidget {
 2. `Widget B`是一个文本，显示购物车中商品数量；
 3. `Widget C`位于`Widget B`旁边，也是一个文本；
 4. 我们希望在按下`Widget A`时自动在`Widget B`购物车中显示正确数量的项目，但我们不希望重建`Widget C`，`InheritedWidget`应用场景就在于此！
-
-
-
-
-
-
-
-
-
 
 
 ## 参考资料
